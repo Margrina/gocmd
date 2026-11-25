@@ -33,7 +33,7 @@ Inside a channel:
     /members               list aliases in the channel
     /exit                  leave
 """
-VERSION = "2.6.1"
+VERSION = "2.6.2"
 
 import argparse
 import asyncio
@@ -707,6 +707,8 @@ def id_hash(kind, value):
 
 
 def machine_identity():
+    if DEVICE == "phone":                  # phones expose no real MAC, and psutil's network code
+        return socket.gethostname(), []    # crashes iSH (segfault) - so don't touch it at all
     macs = set()
     try:
         import psutil
@@ -1421,10 +1423,23 @@ def main():
         server, pin_pub, pin_fpr = addr, None, fpr
         address = lambda: addr
     try:
-        conn = Conn(server, pin_pub=pin_pub, pin_fpr=pin_fpr)
-        conn.send({"type": "hello", "v": VERSION, "kind": DEVICE, "ticket": approval.ticket, "tsig": approval.tsig,
-                   "proof": approval.proof(b"client", conn.c_eph, conn.s_eph)})
-        r = conn.recv()
+        for attempt in range(3):          # the free tunnel sometimes drops a fresh connection
+            try:
+                conn = Conn(server, pin_pub=pin_pub, pin_fpr=pin_fpr)
+                conn.send({"type": "hello", "v": VERSION, "kind": DEVICE, "ticket": approval.ticket,
+                           "tsig": approval.tsig, "proof": approval.proof(b"client", conn.c_eph, conn.s_eph)})
+                r = conn.recv()
+                break
+            except (ConnectionResetError, ConnectionAbortedError, TimeoutError, socket.timeout) as e:
+                if attempt == 2:
+                    raise
+                print(f"Connection dropped ({e.__class__.__name__}), retrying...")
+                time.sleep(1.5)
+            except ConnectionError as e:
+                if "connection closed" not in str(e) or attempt == 2:
+                    raise                 # e.g. host identity mismatch: never retry that
+                print("Connection dropped, retrying...")
+                time.sleep(1.5)
         if r.get("type") == "error":
             sys.exit(r.get("text"))
         if r.get("type") != "ok":
