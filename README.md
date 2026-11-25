@@ -4,7 +4,7 @@ Private, end-to-end encrypted group chat from the Windows command line.
 No accounts, no chat server, no history.
 
 ## Install (easy way)
-1. Download **`gocmd-<version>.msi`** from [Releases](https://github.com/LuaTools441/gocmd/releases/latest) and double-click it. No admin rights and no Python needed.
+1. Download **`gocmd-<version>.msi`** from [Releases](https://github.com/Margrina/gocmd/releases/latest) and double-click it. No admin rights and no Python needed.
 2. Windows may show *"Windows protected your PC"* (the installer is not code-signed): click **More info** → **Run anyway**.
 3. Open a **new** CMD window and type `gocmd -u NAME --new`. There is also a **gocmd** entry in the Start menu.
 
