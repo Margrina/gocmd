@@ -10,11 +10,13 @@ No accounts, no chat server, no history.
 
 Uninstall from *Settings → Apps*. Your install file (`%LOCALAPPDATA%\gocmd\gocmd.lock`) is kept, so reinstalling just works.
 
-## Install from source
+## Install from source (git clone / ZIP)
 1. Install Python 3.10+ from python.org and tick **Add python.exe to PATH**.
-2. `pip install -r requirements.txt`
-3. Put `gocmd.py`, `gocmd.bat` and `gocmd_config.json` in one folder.
-4. Run `python gocmd.py` once and answer `y` - from then on just type `gocmd` in any new CMD window.
+2. `git clone https://github.com/Margrina/gocmd` (or download the ZIP and extract it).
+3. Double-click **`install.bat`** in the folder. It installs the libraries and makes `gocmd` a command.
+4. Open a **new** CMD window and type `gocmd -u NAME --new`.
+
+If gocmd ever says this computer "already has a gocmd install file", send the admin the computer name it shows. After the admin resets it, just run gocmd again - it fixes itself.
 
 ## Use
 | Command | What it does |

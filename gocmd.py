@@ -29,7 +29,7 @@ Inside a channel:
     /members               list aliases in the channel
     /exit                  leave
 """
-VERSION = "2.5.1"
+VERSION = "2.5.2"
 
 import argparse
 import asyncio
@@ -321,12 +321,13 @@ class Approval:
             raise Offline(f"Can't write {LOCK_PATH}. Check that your user folder is writable.")
         r = ban_api(self.cfg, "/register", {"ids": self.ids, "strong": self.strong, "host": socket.gethostname()})
         if not r.get("ok"):
-            raise Offline(r.get("text", "Registration refused."))
+            raise Offline(r.get("text", "Registration refused.") +
+                          f"\nGive the admin this computer name to reset it: {socket.gethostname()}")
         with open(LOCK_PATH, "w", encoding="ascii") as f:
             f.write(r["lock"])
         return r["lock"]
 
-    def renew(self):
+    def renew(self, retry=True):
         try:
             r = ban_api(self.cfg, "/session", {"lock": self.lock(), "ids": self.ids, "strong": self.strong,
                                                "code_hash": self.code_hash, "v": VERSION, "spub": self.spub})
@@ -336,6 +337,12 @@ class Approval:
             raise Offline(f"Offline: can't reach the gocmd server ({e}).")
         if r.get("update"):
             self.update = r["update"]
+        if not r.get("ok") and r.get("reset") and retry:    # an admin reset this install:
+            try:                                             # drop the old file and register again
+                os.remove(LOCK_PATH)
+            except OSError:
+                pass
+            return self.renew(retry=False)
         if not r.get("ok"):
             raise Offline(r.get("text", "Offline."))
         try:                                                             # really from our server?
