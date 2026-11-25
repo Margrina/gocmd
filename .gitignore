@@ -1,0 +1,15 @@
+# secrets and owner-only tools - never upload
+admin_key.bin
+admin_pub.txt
+gocmd_admin.py
+admin_dashboard.bat
+gocmd_banserver.py
+OWNER.md
+*.bin
+*.key
+
+# local state
+.gocmd_setup_done
+__pycache__/
+*.pyc
+*.new
