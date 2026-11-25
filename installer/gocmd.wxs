@@ -1,0 +1,38 @@
+<!-- gocmd MSI (WiX Toolset 5). Built by build_msi.py - do not edit the version here. -->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="gocmd" Manufacturer="LuaTools441" Version="$(var.Version)"
+           UpgradeCode="6B4E1C7A-3D2F-4A8B-9E51-0C7D2F8A9B10" Scope="perUser" Language="1033">
+    <SummaryInformation Description="gocmd - private end-to-end encrypted CMD chat" />
+    <MajorUpgrade DowngradeErrorMessage="A newer version of gocmd is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/LuaTools441/gocmd" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+
+    <!-- Per-user, no admin: %LOCALAPPDATA%\Programs\gocmd (gocmd must be able to write there) -->
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="ProgramsDir" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="gocmd" />
+      </Directory>
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder" />
+
+    <Feature Id="Main" Title="gocmd">
+      <Files Directory="INSTALLFOLDER" Include="!(bindpath.payload)\**" />
+
+      <!-- `gocmd` works in every new CMD window -->
+      <Component Id="UserPath" Directory="INSTALLFOLDER" Guid="9F3A2B71-5C4D-4E6F-8A90-1B2C3D4E5F61">
+        <RegistryValue Root="HKCU" Key="Software\gocmd-installer" Name="path" Type="integer" Value="1" KeyPath="yes" />
+        <Environment Id="PathEnv" Name="PATH" Value="[INSTALLFOLDER]" Part="last" Action="set" System="no" Permanent="no" />
+        <RemoveFolder Id="RemoveInstallFolder" Directory="INSTALLFOLDER" On="uninstall" />
+      </Component>
+
+      <!-- Start menu entry that opens a ready CMD window -->
+      <Component Id="StartMenu" Directory="ProgramMenuFolder" Guid="2D8E4F60-7A1B-4C3D-9E2F-6A5B4C3D2E10">
+        <Shortcut Id="GocmdShortcut" Name="gocmd" Description="Open a command window for gocmd"
+                  Target="[System64Folder]cmd.exe" WorkingDirectory="INSTALLFOLDER"
+                  Arguments="/k &quot;echo gocmd is ready. Create a channel:  gocmd -u NAME --new     Join one:  gocmd -u NAME -o CODE&quot;" />
+        <RegistryValue Root="HKCU" Key="Software\gocmd-installer" Name="shortcut" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </Feature>
+  </Package>
+</Wix>

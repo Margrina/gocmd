@@ -29,7 +29,7 @@ Inside a channel:
     /members               list aliases in the channel
     /exit                  leave
 """
-VERSION = "2.5.0"
+VERSION = "2.5.1"
 
 import argparse
 import asyncio
@@ -254,7 +254,24 @@ class Conn:
 # or forge it, it only hands it back. With it, the server checks this exact code (SHA-256), the
 # hardware, bans and the version, then issues a signed ticket valid for 10 minutes. Channels
 # accept only members with a valid ticket, and members accept only an approved host.
-LOCK_PATH = os.path.join(HERE, "gocmd.lock")
+def _lock_path():
+    """Kept OUTSIDE the gocmd folder (like the device ID), so reinstalling or moving gocmd
+    keeps it. Only deleting this file itself makes you offline."""
+    base = os.environ.get("LOCALAPPDATA") if os.name == "nt" else os.path.expanduser("~/.local/share")
+    if not base:
+        return os.path.join(HERE, "gocmd.lock")
+    path = os.path.join(base, "gocmd", "gocmd.lock")
+    old = os.path.join(HERE, "gocmd.lock")             # move a lock from older versions
+    if os.path.exists(old) and not os.path.exists(path):
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            os.replace(old, path)
+        except OSError:
+            return old
+    return path
+
+
+LOCK_PATH = _lock_path()
 TICKET_RENEW = 4 * 60
 TICKET_GRACE = 300
 
@@ -296,12 +313,12 @@ class Approval:
             with open(LOCK_PATH, encoding="ascii") as f:
                 return f.read().strip()
         try:                               # make sure we can save it BEFORE the server registers us
+            os.makedirs(os.path.dirname(LOCK_PATH), exist_ok=True)
             with open(LOCK_PATH + ".test", "w") as f:
                 f.write("x")
             os.remove(LOCK_PATH + ".test")
         except OSError:
-            raise Offline(f"Can't write to {HERE}. Move gocmd to a folder you can write to "
-                          f"(not Program Files) and run it again.")
+            raise Offline(f"Can't write {LOCK_PATH}. Check that your user folder is writable.")
         r = ban_api(self.cfg, "/register", {"ids": self.ids, "strong": self.strong, "host": socket.gethostname()})
         if not r.get("ok"):
             raise Offline(r.get("text", "Registration refused."))

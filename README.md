@@ -3,7 +3,14 @@
 Private, end-to-end encrypted group chat from the Windows command line.
 No accounts, no chat server, no history.
 
-## Install
+## Install (easy way)
+1. Download **`gocmd-<version>.msi`** from [Releases](https://github.com/LuaTools441/gocmd/releases/latest) and double-click it. No admin rights and no Python needed.
+2. Windows may show *"Windows protected your PC"* (the installer is not code-signed): click **More info** → **Run anyway**.
+3. Open a **new** CMD window and type `gocmd -u NAME --new`. There is also a **gocmd** entry in the Start menu.
+
+Uninstall from *Settings → Apps*. Your install file (`%LOCALAPPDATA%\gocmd\gocmd.lock`) is kept, so reinstalling just works.
+
+## Install from source
 1. Install Python 3.10+ from python.org and tick **Add python.exe to PATH**.
 2. `pip install -r requirements.txt`
 3. Put `gocmd.py`, `gocmd.bat` and `gocmd_config.json` in one folder.
@@ -36,7 +43,7 @@ Rules:
 - These identifiers are sent only as one-way hashes. When you are banned, your computer name and username are recorded with the ban.
 
 ## Server approval (anti-tamper)
-- On first run gocmd creates `gocmd.lock`, an install file sealed by the gocmd server. Your computer can't read or change it. **Don't delete it:** without it you are offline until an admin resets your install.
+- On first run gocmd creates `%LOCALAPPDATA%gocmdgocmd.lock`, an install file sealed by the gocmd server. Your computer can't read or change it. **Don't delete it:** without it you are offline until an admin resets your install.
 - Every few minutes the server checks the install file, that `gocmd.py` is an unmodified official build, bans and the version, then issues a short-lived signed approval.
 - Channels only accept members with a valid approval, and members only connect to an approved host. Modified copies, banned users and computers without approval can't talk to anyone.
 
