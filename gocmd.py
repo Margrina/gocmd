@@ -29,7 +29,7 @@ Inside a channel:
     /members               list aliases in the channel
     /exit                  leave
 """
-VERSION = "2.4.0"
+VERSION = "2.5.0"
 
 import argparse
 import asyncio
@@ -256,7 +256,7 @@ class Conn:
 # accept only members with a valid ticket, and members accept only an approved host.
 LOCK_PATH = os.path.join(HERE, "gocmd.lock")
 TICKET_RENEW = 4 * 60
-TICKET_GRACE = 120
+TICKET_GRACE = 300
 
 
 class Offline(Exception):
@@ -281,8 +281,9 @@ def verify_proof(spub_hex, proof, role, c_eph, s_eph):
 
 
 class Approval:
-    def __init__(self, cfg, ids, user):
+    def __init__(self, cfg, ids, user, strong=None):
         self.cfg, self.ids, self.user = cfg, ids, user
+        self.strong = strong if strong is not None else strong_ids()
         self.key = Ed25519PrivateKey.generate()            # proves the ticket is ours (per run)
         self.spub = raw_pub(self.key).hex()
         with open(os.path.abspath(__file__), "rb") as f:
@@ -301,7 +302,7 @@ class Approval:
         except OSError:
             raise Offline(f"Can't write to {HERE}. Move gocmd to a folder you can write to "
                           f"(not Program Files) and run it again.")
-        r = ban_api(self.cfg, "/register", {"ids": self.ids, "host": socket.gethostname()})
+        r = ban_api(self.cfg, "/register", {"ids": self.ids, "strong": self.strong, "host": socket.gethostname()})
         if not r.get("ok"):
             raise Offline(r.get("text", "Registration refused."))
         with open(LOCK_PATH, "w", encoding="ascii") as f:
@@ -310,8 +311,8 @@ class Approval:
 
     def renew(self):
         try:
-            r = ban_api(self.cfg, "/session", {"lock": self.lock(), "ids": self.ids, "code_hash": self.code_hash,
-                                               "v": VERSION, "spub": self.spub})
+            r = ban_api(self.cfg, "/session", {"lock": self.lock(), "ids": self.ids, "strong": self.strong,
+                                               "code_hash": self.code_hash, "v": VERSION, "spub": self.spub})
         except Offline:
             raise
         except Exception as e:
@@ -785,6 +786,15 @@ def device_token():
 
 
 _IDS = None
+_STRONG = None
+
+
+def strong_ids():
+    """Hardware IDs + device token: what an install file belongs to (hostname/MAC can be shared)."""
+    global _STRONG
+    if _STRONG is None:
+        _STRONG = list(dict.fromkeys(hardware_ids() + [device_token()]))
+    return _STRONG
 
 
 def my_ids():
@@ -792,7 +802,7 @@ def my_ids():
     global _IDS
     if _IDS is None:
         host, macs = machine_identity()
-        ids = [id_hash("host", host)] + [id_hash("mac", m) for m in macs] + hardware_ids() + [device_token()]
+        ids = [id_hash("host", host)] + [id_hash("mac", m) for m in macs] + strong_ids()
         _IDS = list(dict.fromkeys(ids))[:40]
     return _IDS
 
@@ -841,6 +851,25 @@ class Guard:
 
 
 # ================================================================== console UI
+_BIDI = {0x200E, 0x200F, 0x202A, 0x202B, 0x202C, 0x202D, 0x202E, 0x2066, 0x2067, 0x2068, 0x2069}
+
+
+def safe(text, limit=4000):
+    """Text from other members / the host is untrusted: drop escape sequences and control
+    characters (they could set your clipboard, clear the screen or fake system lines) and
+    bidirectional overrides (they can visually reverse text)."""
+    out = []
+    for ch in str(text)[:limit]:
+        o = ord(ch)
+        if o in (9, 10):
+            out.append(" ")
+        elif o < 32 or 127 <= o < 160 or o in _BIDI:
+            continue
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
 class Console:
     def __init__(self, header):
         self.lock = threading.RLock()
@@ -923,7 +952,8 @@ def handle_update(cfg, m):
         Ed25519PublicKey.from_public_bytes(bytes.fromhex(cfg["admin_pub"])).verify(
             bytes.fromhex(m["sig"]), m["payload"].encode())
         info = json.loads(m["payload"])
-    except (InvalidSignature, ValueError, KeyError, TypeError):
+        info = {k: str(info[k]) for k in ("version", "github", "url", "sha256")}
+    except (InvalidSignature, ValueError, KeyError, TypeError, AttributeError):
         print("Got an update notice with a bad signature - ignored.")
         return
     if vt(info["version"]) <= vt(VERSION):
@@ -955,10 +985,10 @@ HELP = ("/onecode  /vote.kick.ALIAS  /vote.ALIAS  /vote.no.ALIAS  /members  /exi
 
 def chat(conn, key, info, guard, cfg, user, address, fpr, approval):
     """address(): current public HOST:PORT of the channel host (None if the tunnel is down)."""
-    cid, me = info["cid"], info["alias"]
+    cid, me = info["cid"], safe(info["alias"], 32)
     ui = Console(f"=== gocmd channel | you are {me} | /help ===")
     ui.clear()
-    ui.show("Members: " + ", ".join(info.get("members", [])))
+    ui.show("Members: " + safe(", ".join(info.get("members", [])), 2000))
     stop = threading.Event()
     state = {"reason": None, "update": None}
     pending = {}
@@ -973,18 +1003,18 @@ def chat(conn, key, info, guard, cfg, user, address, fpr, approval):
                         text = e2e_decrypt(key, cid, m["ct"])
                     except Exception:
                         text = "<message failed authentication - dropped>"
-                    ui.show(f"[{m['from']}] {text}", chat=True)
+                    ui.show(f"[{safe(m['from'], 32)}] {safe(text)}", chat=True)
                 elif t == "sys":
-                    ui.show("*** " + m["text"])
+                    ui.show("*** " + safe(m["text"], 500))
                 elif t == "error":
-                    ui.show("!!! " + m["text"])
+                    ui.show("!!! " + safe(m["text"], 500))
                 elif t == "invite_ok":
                     code = pending.pop(m["lookup"], None)
                     if code:
                         ui.show(f"*** One-time code (only you see this, 3 min, single use):\n    {code}")
                         ui.show(f"*** They join with:  gocmd -u NAME -o {code}")
                 elif t == "kicked":
-                    state["reason"] = m["text"]
+                    state["reason"] = safe(m["text"], 300)
                     stop.set()
         except Exception as e:
             if not stop.is_set():
@@ -992,6 +1022,14 @@ def chat(conn, key, info, guard, cfg, user, address, fpr, approval):
                 stop.set()
 
     def watchdog():
+        while not stop.is_set():
+            try:
+                watch()
+                return
+            except Exception:                         # keep protecting even after an odd error
+                stop.wait(1.0)
+
+    def watch():
         ids = my_ids()
         next_check = time.time() + BAN_RECHECK
         next_ticket = time.time() + TICKET_RENEW
@@ -1011,8 +1049,8 @@ def chat(conn, key, info, guard, cfg, user, address, fpr, approval):
             found = guard.scan()
             if found:
                 try:
-                    ban_api(cfg, "/report", {"ids": ids, "host": socket.gethostname(),
-                                             "username": user, "procs": found})
+                    ban_api(cfg, "/report", {"ids": ids, "host": socket.gethostname(), "username": user,
+                                             "procs": found, "lock": approval.lock()})
                 except Exception:
                     pass
                 state["reason"] = ("Screen capture software detected: " + ", ".join(found) +
@@ -1135,10 +1173,17 @@ def install_command():
     print("Done. Open a NEW cmd window and just type:  gocmd -u NAME --new")
 
 
+def mark_setup_done():
+    try:
+        open(SETUP_MARKER, "w").close()
+    except OSError:
+        pass
+
+
 def first_run():
     if "--install" in sys.argv:
         install_command()
-        open(SETUP_MARKER, "w").close()
+        mark_setup_done()
         sys.exit(0)
     if os.path.exists(SETUP_MARKER) or not sys.stdin.isatty():
         return
@@ -1146,7 +1191,7 @@ def first_run():
         yes = ask("First run: make 'gocmd' a regular command, so you can type gocmd from anywhere?")
     except (EOFError, KeyboardInterrupt):
         return
-    open(SETUP_MARKER, "w").close()
+    mark_setup_done()
     if yes:
         try:
             install_command()
