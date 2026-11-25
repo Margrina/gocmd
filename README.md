@@ -43,7 +43,7 @@ Rules:
 - These identifiers are sent only as one-way hashes. When you are banned, your computer name and username are recorded with the ban.
 
 ## Server approval (anti-tamper)
-- On first run gocmd creates `%LOCALAPPDATA%gocmdgocmd.lock`, an install file sealed by the gocmd server. Your computer can't read or change it. **Don't delete it:** without it you are offline until an admin resets your install.
+- On first run gocmd creates `%LOCALAPPDATA%\gocmd\gocmd.lock`, an install file sealed by the gocmd server. Your computer can't read or change it. **Don't delete it:** without it you are offline until an admin resets your install.
 - Every few minutes the server checks the install file, that `gocmd.py` is an unmodified official build, bans and the version, then issues a short-lived signed approval.
 - Channels only accept members with a valid approval, and members only connect to an approved host. Modified copies, banned users and computers without approval can't talk to anyone.
 
