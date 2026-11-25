@@ -20,6 +20,10 @@ public tunnel for it. The only central piece is the ban server (bans, unbans, up
 Usage:
     gocmd -u NAME --new          create a new channel
     gocmd -u NAME -o CODE        join a channel with a one-time code
+    gocmd -u NAME --new --pc-only   a channel that refuses phones
+
+Runs on Windows, Linux, Termux (Android), iSH and a-Shell (iPhone). Phones can't block
+screenshots, so phone users are shown with a [phone] tag.
 
 Inside a channel:
     /onecode               one-time join code (shown only to you, 3 min, single use)
@@ -29,7 +33,7 @@ Inside a channel:
     /members               list aliases in the channel
     /exit                  leave
 """
-VERSION = "2.5.2"
+VERSION = "2.6.0"
 
 import argparse
 import asyncio
@@ -368,6 +372,7 @@ class Peer:
         self.bad_joins = 0
         self.spub = None
         self.ticket_exp = 0
+        self.phone = False
 
     async def send(self, obj):
         if self.closed:
@@ -397,8 +402,9 @@ class Relay:
     """Hosts exactly one channel, in RAM, on the creator's computer. It routes ciphertext and
     enforces the rules (invites, votes, idle kicks); it never has the channel key."""
 
-    def __init__(self, ticket_pub, approval):
+    def __init__(self, ticket_pub, approval, pc_only=False):
         self.ticket_pub, self.approval = ticket_pub, approval
+        self.pc_only = pc_only
         self.static = X25519PrivateKey.generate()          # fresh identity per channel
         self.pub = raw_pub(self.static)
         self.fpr = fingerprint(self.pub)
@@ -416,6 +422,9 @@ class Relay:
         for p in list(self.members.values()):
             if p is not exclude:
                 await p.send({"type": "sys", "text": text})
+
+    def member_names(self):
+        return [a + (" [phone]" if p.phone else "") for a, p in self.members.items()]
 
     def resolve(self, s):
         s = s.strip()
@@ -463,6 +472,9 @@ class Relay:
         if t == "join":
             if peer.alias:
                 return
+            if self.pc_only and peer.phone:   # checked before the code is used up
+                return await peer.send({"type": "error", "text": "This channel is PC-only "
+                                        f"({PHONE_NOTE}). Ask for a channel that allows phones."})
             inv = self.invites.pop(str(m.get("lookup")), None)
             if self.dead or not inv or inv[1] < time.time():
                 peer.bad_joins += 1
@@ -478,8 +490,9 @@ class Relay:
             self.members[peer.alias] = peer
             self.started = True
             await peer.send({"type": "joined", "cid": self.cid, "alias": peer.alias,
-                             "members": list(self.members), "blob": inv[0]})
-            await self.sys(f"{peer.alias} joined.", exclude=peer)
+                             "members": self.member_names(), "blob": inv[0], "pc_only": self.pc_only})
+            note = f" [phone] - {PHONE_NOTE} for them" if peer.phone else ""
+            await self.sys(f"{peer.alias} joined{note}.", exclude=peer)
             return
         if t == "ticket":                          # renewed approval
             try:
@@ -498,7 +511,7 @@ class Relay:
             peer.last_active, peer.warned = time.time(), False
             for other in list(self.members.values()):
                 if other is not peer:
-                    await other.send({"type": "msg", "from": peer.alias, "ct": ct})
+                    await other.send({"type": "msg", "from": peer.alias, "ct": ct, "phone": peer.phone})
         elif t == "invite_put":
             lookup, blob = str(m.get("lookup", "")), str(m.get("blob", ""))
             if len(lookup) != 64 or len(blob) > 200:
@@ -510,7 +523,7 @@ class Relay:
             self.invites[lookup] = (blob, now + INVITE_TTL)
             await peer.send({"type": "invite_ok", "lookup": lookup})
         elif t == "members":
-            await peer.send({"type": "sys", "text": "Members: " + ", ".join(self.members)})
+            await peer.send({"type": "sys", "text": "Members: " + ", ".join(self.member_names())})
         elif t == "vote_kick":
             target = self.resolve(str(m.get("target", "")))
             err = None
@@ -565,6 +578,7 @@ class Relay:
             except Exception:
                 return await peer.send({"type": "error", "text": "No server approval - you are offline."})
             peer.spub, peer.ticket_exp = d["spub"], d["exp"]
+            peer.phone = hello.get("kind") == "phone"
             a = self.approval
             await peer.send({"type": "ok", "ticket": a.ticket, "tsig": a.tsig,
                              "proof": a.proof(b"host", c_eph, s_eph)})
@@ -651,8 +665,8 @@ class Relay:
 class Host:
     """Runs a Relay on a background thread of this process."""
 
-    def __init__(self, ticket_pub, approval, tunnel_host=TUNNEL_HOST):
-        self.relay = Relay(ticket_pub, approval)
+    def __init__(self, ticket_pub, approval, tunnel_host=TUNNEL_HOST, pc_only=False):
+        self.relay = Relay(ticket_pub, approval, pc_only)
         self.tunnel_host = tunnel_host
         self.port = None
         self.loop = asyncio.new_event_loop()
@@ -821,12 +835,17 @@ def strong_ids():
     return _STRONG
 
 
+GENERIC_HOSTS = {"", "localhost", "localhost.localdomain", "ish", "iphone", "ipad", "android", "a-shell"}
+
+
 def my_ids():
-    """Everything a ban is tied to: hostname, MACs, hardware IDs and the device token."""
+    """Everything a ban is tied to: hostname, MACs, hardware IDs and the device token.
+    Hostnames that many devices share (every Android phone is 'localhost') are left out."""
     global _IDS
     if _IDS is None:
         host, macs = machine_identity()
-        ids = [id_hash("host", host)] + [id_hash("mac", m) for m in macs] + strong_ids()
+        hosts = [] if host.strip().lower() in GENERIC_HOSTS else [id_hash("host", host)]
+        ids = hosts + [id_hash("mac", m) for m in macs] + strong_ids()
         _IDS = list(dict.fromkeys(ids))[:40]
     return _IDS
 
@@ -840,16 +859,55 @@ def ban_api(cfg, path, body):
         return json.loads(r.read())
 
 
+# ================================================================== device kind
+def device_kind():
+    """'phone' on Termux / iSH / a-Shell: a terminal app there can't see other apps, so
+    screenshots and screen recording can't be blocked. Everything else is 'pc'."""
+    if os.name == "nt":
+        return "pc"
+    if os.environ.get("TERMUX_VERSION") or "com.termux" in os.environ.get("PREFIX", ""):
+        return "phone"
+    if os.path.exists("/proc/ish") or sys.platform == "ios":
+        return "phone"
+    try:
+        u = os.uname()
+    except AttributeError:
+        return "pc"
+    if "ish" in u.release.lower() or u.machine.startswith(("iPhone", "iPad", "iPod")):
+        return "phone"
+    if sys.platform == "darwin" and "/var/mobile/" in os.path.expanduser("~"):   # a-Shell
+        return "phone"
+    return "pc"
+
+
+DEVICE = device_kind()
+PHONE_NOTE = "screenshots can't be blocked on phones"
+
+
 # ================================================================== local protection
 def running_processes():
     try:
         import psutil
         return {(p.info["name"] or "").lower() for p in psutil.process_iter(["name"])}
     except ImportError:
+        pass
+    if os.name == "nt":
         import csv
         import subprocess
         out = subprocess.run(["tasklist", "/fo", "csv", "/nh"], capture_output=True, text=True).stdout
         return {row[0].lower() for row in csv.reader(out.splitlines()) if row}
+    names = set()
+    try:                                   # Linux: /proc/<pid>/comm (phones only show our own app)
+        for pid in os.listdir("/proc"):
+            if pid.isdigit():
+                try:
+                    with open(f"/proc/{pid}/comm") as f:
+                        names.add(f.read().strip().lower())
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    return names
 
 
 class Guard:
@@ -928,10 +986,7 @@ class Console:
 
     def readline(self, stop):
         if os.name != "nt":
-            try:
-                return input(self.prompt)
-            except EOFError:
-                return None
+            return self._readline_posix(stop)
         import msvcrt
         self._redraw()
         while not stop.is_set():
@@ -959,6 +1014,65 @@ class Console:
                     self.buf.append(ch)
                 self._redraw()
         return None
+
+
+def _posix_readline(self, stop):
+    """Character-by-character input so incoming messages don't break the line you type."""
+    try:
+        import codecs
+        import select
+        import termios
+        import tty
+        fd = sys.stdin.fileno()
+        old = termios.tcgetattr(fd)
+    except Exception:                      # no real terminal (e.g. a-Shell): plain line input
+        try:
+            import select
+            self._redraw()
+            while not stop.is_set():
+                if select.select([sys.stdin], [], [], 0.2)[0]:
+                    line = sys.stdin.readline()
+                    return line.rstrip("\r\n") if line else None
+            return None
+        except Exception:
+            try:
+                return input(self.prompt)
+            except EOFError:
+                return None
+    dec = codecs.getincrementaldecoder("utf-8")("ignore")
+    try:
+        tty.setcbreak(fd)                  # keys arrive one by one; Ctrl+C still works
+        self._redraw()
+        while not stop.is_set():
+            if not select.select([fd], [], [], 0.05)[0]:
+                continue
+            chunk = os.read(fd, 64)
+            if not chunk:
+                return None
+            if chunk.startswith(b"\x1b"):     # arrow / function keys: ignore
+                continue
+            for ch in dec.decode(chunk):
+                with self.lock:
+                    if ch in ("\r", "\n"):
+                        line = "".join(self.buf)
+                        self.buf = []
+                        sys.stdout.write("\r\x1b[2K")
+                        sys.stdout.flush()
+                        return line
+                    if ch == "\x04":          # Ctrl+D
+                        return None
+                    if ch in ("\x7f", "\x08"):
+                        if self.buf:
+                            self.buf.pop()
+                    elif ch.isprintable() and len(self.buf) < 2000:
+                        self.buf.append(ch)
+                    self._redraw()
+        return None
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
+Console._readline_posix = _posix_readline
 
 
 # ================================================================== update flow
@@ -1010,7 +1124,8 @@ HELP = ("/onecode  /vote.kick.ALIAS  /vote.ALIAS  /vote.no.ALIAS  /members  /exi
 def chat(conn, key, info, guard, cfg, user, address, fpr, approval):
     """address(): current public HOST:PORT of the channel host (None if the tunnel is down)."""
     cid, me = info["cid"], safe(info["alias"], 32)
-    ui = Console(f"=== gocmd channel | you are {me} | /help ===")
+    mode = " | PC-only" if info.get("pc_only") else ""
+    ui = Console(f"=== gocmd channel | you are {me}{' [phone]' if DEVICE == 'phone' else ''}{mode} | /help ===")
     ui.clear()
     ui.show("Members: " + safe(", ".join(info.get("members", [])), 2000))
     stop = threading.Event()
@@ -1027,7 +1142,8 @@ def chat(conn, key, info, guard, cfg, user, address, fpr, approval):
                         text = e2e_decrypt(key, cid, m["ct"])
                     except Exception:
                         text = "<message failed authentication - dropped>"
-                    ui.show(f"[{safe(m['from'], 32)}] {safe(text)}", chat=True)
+                    tag = " [phone]" if m.get("phone") else ""
+                    ui.show(f"[{safe(m['from'], 32)}{tag}] {safe(text)}", chat=True)
                 elif t == "sys":
                     ui.show("*** " + safe(m["text"], 500))
                 elif t == "error":
@@ -1188,12 +1304,24 @@ def install_command():
             import ctypes          # tell Windows the environment changed (new windows pick it up)
             ctypes.windll.user32.SendMessageTimeoutW(0xFFFF, 0x1A, 0, "Environment", 2, 5000, None)
     else:
-        bindir = os.path.expanduser("~/.local/bin")
+        prefix = os.environ.get("PREFIX", "")
+        if "com.termux" in prefix:                                   # Termux
+            bindir = os.path.join(prefix, "bin")
+        elif sys.platform == "darwin" and "/var/mobile/" in os.path.expanduser("~"):   # a-Shell
+            bindir = os.path.expanduser("~/Documents/bin")
+        elif os.access("/usr/local/bin", os.W_OK):                   # iSH (root) / Linux as root
+            bindir = "/usr/local/bin"
+        else:
+            bindir = os.path.expanduser("~/.local/bin")
         os.makedirs(bindir, exist_ok=True)
         launcher = os.path.join(bindir, "gocmd")
         with open(launcher, "w") as f:
             f.write(f'#!/bin/sh\nexec python3 "{os.path.join(HERE, "gocmd.py")}" "$@"\n')
         os.chmod(launcher, 0o755)
+        if bindir not in os.environ.get("PATH", "").split(os.pathsep):
+            print(f"Add {bindir} to your PATH to use the gocmd command.")
+        print("Done. Type:  gocmd -u NAME --new")
+        return
     print("Done. Open a NEW cmd window and just type:  gocmd -u NAME --new")
 
 
@@ -1234,10 +1362,16 @@ def main():
     p.add_argument("-u", dest="user", required=True, help="your username (only stored with bans)")
     p.add_argument("-o", dest="code", help="one-time code to join a channel")
     p.add_argument("--new", "-new", dest="new", action="store_true", help="create a new channel")
+    p.add_argument("--pc-only", dest="pc_only", action="store_true",
+                   help="with --new: refuse phones (they can't block screenshots)")
     p.add_argument("--version", action="version", version=f"gocmd {VERSION}")
     a = p.parse_args()
     if bool(a.code) == bool(a.new):
         p.error("use exactly one of:  -o CODE  (join)   or   --new  (create)")
+    if a.pc_only and (not a.new or DEVICE == "phone"):
+        p.error("--pc-only is for creating a channel on a PC")
+    if DEVICE == "phone":
+        print(f"Note: you are on a phone - {PHONE_NOTE}, so others will see you as [phone].")
     cfg = load_config()
     guard = Guard(cfg)
     found = guard.scan()
@@ -1269,7 +1403,7 @@ def main():
     host = None
     if a.new:
         print("Opening a private channel on this computer...")
-        host = Host(cfg["ticket_pub"], approval)
+        host = Host(cfg["ticket_pub"], approval, pc_only=a.pc_only)
         if not host.start():
             sys.exit("Could not open the public tunnel (bore.pub unreachable). Try again later.")
         secret = new_secret()
@@ -1283,7 +1417,7 @@ def main():
         address = lambda: addr
     try:
         conn = Conn(server, pin_pub=pin_pub, pin_fpr=pin_fpr)
-        conn.send({"type": "hello", "v": VERSION, "ticket": approval.ticket, "tsig": approval.tsig,
+        conn.send({"type": "hello", "v": VERSION, "kind": DEVICE, "ticket": approval.ticket, "tsig": approval.tsig,
                    "proof": approval.proof(b"client", conn.c_eph, conn.s_eph)})
         r = conn.recv()
         if r.get("type") == "error":

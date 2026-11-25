@@ -32,10 +32,22 @@ Uninstall from *Settings → Apps*. Your install file (`%LOCALAPPDATA%\gocmd\goc
 
 If gocmd ever says this computer "already has a gocmd install file", send the admin the computer name it shows. After the admin resets it, just run gocmd again - it fixes itself.
 
+## Phones: Termux (Android) and iSH (iPhone)
+Install [Termux](https://f-droid.org/packages/com.termux/) (from F-Droid) or [iSH](https://apps.apple.com/app/ish-shell/id1436902243), open it and paste:
+```
+curl -fsSL https://raw.githubusercontent.com/Margrina/gocmd/main/install.sh | sh
+```
+iSH needs `apk add curl` first. Then type `gocmd -u NAME --new` or `gocmd -u NAME -o CODE`.
+
+**a-Shell (iPhone):** run `lg2 clone https://github.com/Margrina/gocmd`, then `cd gocmd` and `python3 gocmd.py -u NAME --new`. It needs the Python `cryptography` package; if a-Shell can't load it, use iSH instead.
+
+**What's different on a phone:** a terminal app can't see other apps, so **screenshots can't be blocked on phones**. Everyone in the channel sees phone users with a **[phone]** tag. To keep phones out, open the channel with `gocmd -u NAME --new --pc-only`. On iPhone, leaving the app pauses it, so you'll be disconnected after a while.
+
 ## Use
 | Command | What it does |
 |---|---|
 | `gocmd -u NAME --new` | open a new channel (hosted on your own computer) |
+| `gocmd -u NAME --new --pc-only` | open a channel that refuses phones |
 | `gocmd -u NAME -o CODE` | join a channel with a one-time code |
 | `/onecode` | make a join code - shown only to you, valid 3 minutes, single use |
 | `/vote.kick.ALIAS` | start a 60-second kick vote |
