@@ -16,3 +16,4 @@ __pycache__/
 gocmd.lock
 build/
 dist/
+LAUNCH_POSTS.md

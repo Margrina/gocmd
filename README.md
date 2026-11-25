@@ -1,7 +1,21 @@
 # gocmd
 
-Private, end-to-end encrypted group chat from the Windows command line.
-No accounts, no chat server, no history.
+**Private, end-to-end encrypted group chat from the Windows command line.**
+No accounts, no chat server, no history. Channels live in RAM and vanish when the last person leaves.
+
+[![Latest release](https://img.shields.io/github/v/release/Margrina/gocmd?label=download)](https://github.com/Margrina/gocmd/releases/latest)
+[![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
+![Windows](https://img.shields.io/badge/platform-Windows-0078d4)
+
+<p align="center"><img src="docs/demo.svg" alt="Animated illustration of a gocmd chat session" width="900"></p>
+<p align="center"><sub>An illustration, not a recording: gocmd bans anyone who opens screen-recording software during a chat.</sub></p>
+
+## Why gocmd
+- **Invite-only.** You get in only with a one-time code someone inside gives you. It works once and expires after 3 minutes.
+- **Nothing to read, even on the wire.** Messages are end-to-end encrypted; Wireshark sees only random bytes.
+- **No host with special powers.** Everyone gets a random name. Kicking someone takes a vote.
+- **Leaves no trail.** The screen wipes every 10 messages, idle people are kicked after 7 minutes, and the channel is gone when the last person leaves.
+- **Hard to leak.** Screenshot and recording tools are blocked while you chat.
 
 ## Install (easy way)
 1. Download **`gocmd-<version>.msi`** from [Releases](https://github.com/Margrina/gocmd/releases/latest) and double-click it. No admin rights and no Python needed.
@@ -51,3 +65,6 @@ Rules:
 
 ## Updates
 When a new version is published you are asked to update. Updates are signed by the owner and verified (signature + SHA-256) before gocmd replaces itself.
+
+## License
+gocmd is free software under the [GNU GPL v3](LICENSE): you can use, study, share and modify it, and any copy you share must stay open under the same license.
