@@ -13,3 +13,4 @@ OWNER.md
 __pycache__/
 *.pyc
 *.new
+gocmd.lock

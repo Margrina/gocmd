@@ -1,5 +1,6 @@
 {
   "ban_server": "https://impending-closure-outthink.ngrok-free.dev",
   "admin_pub": "5b61229286ff5d1e60e29b3cf169c1d8ccc4ecbd7dd062d0d5ea9f0960bbf341",
-  "extra_blocked_processes": []
+  "extra_blocked_processes": [],
+  "ticket_pub": "3bdb567182c24bd0e8495ae6e1c99fe87b7ef0df667602cd18654e44274eda64"
 }

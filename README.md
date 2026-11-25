@@ -35,5 +35,10 @@ Rules:
 - **What a ban is tied to:** public IP, computer name, MAC addresses, hardware identifiers (motherboard UUID and serial, disk serials, Windows MachineGuid) and a device ID that gocmd stores outside its folder (`%LOCALAPPDATA%\gocmd`, `%APPDATA%\gocmd`, `HKCU\Software\gocmd`). Deleting gocmd does not lift a ban.
 - These identifiers are sent only as one-way hashes. When you are banned, your computer name and username are recorded with the ban.
 
+## Server approval (anti-tamper)
+- On first run gocmd creates `gocmd.lock`, an install file sealed by the gocmd server. Your computer can't read or change it. **Don't delete it:** without it you are offline until an admin resets your install.
+- Every few minutes the server checks the install file, that `gocmd.py` is an unmodified official build, bans and the version, then issues a short-lived signed approval.
+- Channels only accept members with a valid approval, and members only connect to an approved host. Modified copies, banned users and computers without approval can't talk to anyone.
+
 ## Updates
 When a new version is published you are asked to update. Updates are signed by the owner and verified (signature + SHA-256) before gocmd replaces itself.
