@@ -29,7 +29,7 @@ Inside a channel:
     /members               list aliases in the channel
     /exit                  leave
 """
-VERSION = "2.3.0"
+VERSION = "2.4.0"
 
 import argparse
 import asyncio
@@ -60,6 +60,7 @@ CONFIG_PATH = os.path.join(HERE, "gocmd_config.json")
 MAX_FRAME = 1 << 20
 PAD_TRANSPORT = 1024   # every wire frame is a multiple of 1 KiB -> message length is hidden
 PAD_MSG = 256          # every chat message ciphertext is a multiple of 256 bytes
+PROTOCOL_TAG = bytes.fromhex("ffb8c7ce5dcdaf6c4cff3c1239d892c2")   # wire-format tag
 CLEAR_EVERY = 10       # wipe the screen after every 10 chat messages
 INVITE_TTL = 180
 IDLE_KICK = 7 * 60
@@ -145,7 +146,7 @@ class Session:
 
 
 def derive_session(dh_static, dh_eph, c_eph, s_eph, is_client):
-    km = hkdf(dh_static + dh_eph, b"gocmd-transport-v2", 64, salt=c_eph + s_eph)
+    km = hkdf(dh_static + dh_eph, b"gocmd-transport-v3|" + PROTOCOL_TAG, 64, salt=c_eph + s_eph)
     c2s, s2c = km[:32], km[32:]
     return Session(c2s, s2c) if is_client else Session(s2c, c2s)
 
@@ -180,7 +181,7 @@ def code_material(secret):
     raw = base64.b32decode(secret.split("@", 1)[0].replace("-", "").replace(" ", "").upper())
     if len(raw) != 15:
         raise ValueError("bad code")
-    return hashlib.sha256(b"gocmd-lookup" + raw).hexdigest(), hkdf(raw, b"gocmd-wrap")
+    return hashlib.sha256(b"gocmd-lookup" + PROTOCOL_TAG + raw).hexdigest(), hkdf(raw, b"gocmd-wrap")
 
 
 def wrap_key(wrap, key):
@@ -293,6 +294,13 @@ class Approval:
         if os.path.exists(LOCK_PATH):
             with open(LOCK_PATH, encoding="ascii") as f:
                 return f.read().strip()
+        try:                               # make sure we can save it BEFORE the server registers us
+            with open(LOCK_PATH + ".test", "w") as f:
+                f.write("x")
+            os.remove(LOCK_PATH + ".test")
+        except OSError:
+            raise Offline(f"Can't write to {HERE}. Move gocmd to a folder you can write to "
+                          f"(not Program Files) and run it again.")
         r = ban_api(self.cfg, "/register", {"ids": self.ids, "host": socket.gethostname()})
         if not r.get("ok"):
             raise Offline(r.get("text", "Registration refused."))
@@ -312,7 +320,11 @@ class Approval:
             self.update = r["update"]
         if not r.get("ok"):
             raise Offline(r.get("text", "Offline."))
-        verify_ticket(self.cfg["ticket_pub"], r["ticket"], r["sig"])     # really from our server?
+        try:                                                             # really from our server?
+            verify_ticket(self.cfg["ticket_pub"], r["ticket"], r["sig"])
+        except Exception:
+            raise Offline("Offline: the approval did not come from the real gocmd server "
+                          "(wrong ticket_pub in gocmd_config.json, or your clock is very wrong).")
         self.ticket, self.tsig = r["ticket"], r["sig"]
 
     def proof(self, role, c_eph, s_eph):
@@ -468,6 +480,8 @@ class Relay:
                 return
             now = time.time()
             self.invites = {k: v for k, v in self.invites.items() if v[1] > now}
+            if len(self.invites) >= 50:
+                return await peer.send({"type": "error", "text": "Too many open codes - wait a few minutes."})
             self.invites[lookup] = (blob, now + INVITE_TTL)
             await peer.send({"type": "invite_ok", "lookup": lookup})
         elif t == "members":
@@ -534,7 +548,7 @@ class Relay:
                 if isinstance(m, dict):
                     await self.dispatch(peer, m)
         except (asyncio.IncompleteReadError, asyncio.TimeoutError, ConnectionError, OSError,
-                InvalidTag, ValueError, KeyError, TypeError):
+                InvalidTag, ValueError, KeyError, TypeError, AttributeError):
             pass
         finally:
             if peer:
@@ -546,19 +560,25 @@ class Relay:
     async def ticker(self):
         while True:
             await asyncio.sleep(2)
-            now = time.time()
-            for target, poll in list(self.polls.items()):
-                if poll["ends"] <= now:
-                    await self.resolve_poll(target)
-            for p in list(self.members.values()):
-                idle = now - p.last_active
-                if p.ticket_exp + TICKET_GRACE < now:
-                    await self.kick(p, "Offline: lost server approval.", "went offline (no server approval)")
-                elif idle >= IDLE_KICK:
-                    await self.kick(p, "Kicked: no message for 7 minutes.", "was kicked for inactivity")
-                elif idle >= IDLE_WARN and not p.warned:
-                    p.warned = True
-                    await p.send({"type": "sys", "text": "Send a message within 1 minute or you will be kicked."})
+            try:
+                await self._tick()
+            except Exception:              # never let one bad tick stop idle kicks and votes
+                pass
+
+    async def _tick(self):
+        now = time.time()
+        for target, poll in list(self.polls.items()):
+            if poll["ends"] <= now:
+                await self.resolve_poll(target)
+        for p in list(self.members.values()):
+            idle = now - p.last_active
+            if p.ticket_exp + TICKET_GRACE < now:
+                await self.kick(p, "Offline: lost server approval.", "went offline (no server approval)")
+            elif idle >= IDLE_KICK:
+                await self.kick(p, "Kicked: no message for 7 minutes.", "was kicked for inactivity")
+            elif idle >= IDLE_WARN and not p.warned:
+                p.warned = True
+                await p.send({"type": "sys", "text": "Send a message within 1 minute or you will be kicked."})
 
     # -- tunnel: speaks the open bore protocol to bore.pub, so the channel gets a public
     #    address with no port forwarding. bore.pub only carries encrypted bytes.
@@ -580,7 +600,10 @@ class Relay:
             pass
 
     async def tunnel(self, host, ready):
+        w = None
         while not self.dead:
+            if w:
+                w.close()                  # drop the old control connection before reconnecting
             try:
                 r, w = await asyncio.wait_for(asyncio.open_connection(host, BORE_PORT), 15)
                 await self._bsend(w, {"Hello": 0})
@@ -656,13 +679,35 @@ def machine_identity():
         pass
     node = uuid.getnode()
     macs.add(":".join(f"{(node >> s) & 0xff:02x}" for s in range(40, -1, -8)))
-    macs = {m for m in macs if m.strip("0:") and len(m) == 17}
-    return socket.gethostname(), sorted(macs)[:16]
+    return socket.gethostname(), sorted(m for m in macs if is_real_mac(m))[:16]
+
+
+# Virtual adapters (Hyper-V/WSL, VMware, VirtualBox, Parallels, Xen, QEMU...) - their MACs are
+# shared or random, so banning on them could hit unrelated people.
+VIRTUAL_OUIS = ("00:15:5d", "00:50:56", "00:0c:29", "00:05:69", "00:1c:14", "08:00:27", "0a:00:27",
+                "00:1c:42", "00:03:ff", "00:16:3e", "52:54:00", "00:ff:", "02:00:4c")
+
+
+def is_real_mac(m):
+    if len(m) != 17 or not m.strip("0:f"):
+        return False
+    first = int(m[:2], 16)
+    if first & 0x03:                    # multicast or locally administered (random / virtual)
+        return False
+    return not m.startswith(VIRTUAL_OUIS)
 
 
 JUNK_IDS = {"", "default string", "to be filled by o.e.m.", "none", "system serial number", "0",
             "not applicable", "n/a", "unknown", "123456789", "0123456789", "base board serial number",
-            "00000000-0000-0000-0000-000000000000", "ffffffff-ffff-ffff-ffff-ffffffffffff"}
+            "00000000-0000-0000-0000-000000000000", "ffffffff-ffff-ffff-ffff-ffffffffffff",
+            "03000200-0400-0500-0006-000700080009",       # default UUID shared by many boards
+            "chassis serial number", "o.e.m.", "oem", "none provided", "invalid", "serial"}
+
+
+def is_junk_id(v):
+    v = v.strip().strip(".").lower()
+    core = "".join(c for c in v if c.isalnum())
+    return v in JUNK_IDS or len(core) < 4 or len(set(core)) <= 1     # e.g. 00000000, FFFF
 
 
 def hardware_ids():
@@ -695,8 +740,7 @@ def hardware_ids():
                 found.append((kind, open(path).read()))
             except OSError:
                 pass
-    return [id_hash(k, str(v).strip().strip(".")) for k, v in found
-            if v and str(v).strip().strip(".").lower() not in JUNK_IDS]
+    return [id_hash(k, str(v).strip().strip(".")) for k, v in found if v and not is_junk_id(str(v))]
 
 
 def device_token():
