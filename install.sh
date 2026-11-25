@@ -15,7 +15,7 @@ if [ -n "$TERMUX_VERSION" ] || echo "${PREFIX:-}" | grep -q com.termux; then
 elif [ -e /proc/ish ] || command -v apk >/dev/null 2>&1; then
     echo "iSH / Alpine detected (this can take a few minutes on iSH)."
     apk update
-    apk add python3 py3-cryptography py3-psutil git
+    apk add python3 py3-cryptography git
 elif command -v apt-get >/dev/null 2>&1; then
     SUDO=""
     [ "$(id -u)" -ne 0 ] && SUDO="sudo"

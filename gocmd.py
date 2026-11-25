@@ -33,7 +33,7 @@ Inside a channel:
     /members               list aliases in the channel
     /exit                  leave
 """
-VERSION = "2.6.0"
+VERSION = "2.6.1"
 
 import argparse
 import asyncio
@@ -889,7 +889,7 @@ def running_processes():
     try:
         import psutil
         return {(p.info["name"] or "").lower() for p in psutil.process_iter(["name"])}
-    except ImportError:
+    except Exception:                      # missing, or broken on this system (e.g. iSH's /proc)
         pass
     if os.name == "nt":
         import csv
@@ -915,7 +915,12 @@ class Guard:
         self.blocked = RECORDERS | {p.lower() for p in cfg.get("extra_blocked_processes", [])}
 
     def scan(self):
-        return sorted(running_processes() & self.blocked)
+        if DEVICE == "phone":              # phones never let a terminal see other apps
+            return []
+        try:
+            return sorted(running_processes() & self.blocked)
+        except Exception:
+            return []
 
     @staticmethod
     def wipe_clipboard_images():
